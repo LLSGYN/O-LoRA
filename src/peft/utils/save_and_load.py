@@ -35,20 +35,25 @@ def get_peft_model_state_dict(model, state_dict=None, adapter_name="default"):
         # modified
         if config.save_loranew == False:
             flag = 1 # this is a switch represents whether 'r_sum' is written to the config file
-            for k in state_dict:
+            keys = list(state_dict.keys())
+            for k in keys:
                 if "lora_A" in k:
-                    for k_ in state_dict:
-                        if "loranew_A" in k_ and k.split("lora_A")[0] == k_.split("loranew_A")[0]:
-                            state_dict[k] = torch.cat((state_dict[k], state_dict[k_]), dim=0) # [r_sum + r, r]
-                            if flag == 1:
-                                config.r_sum = state_dict[k].shape[0] 
-                                flag = 0
-                            break # target modules have been matched
+                    prefix = k.split("lora_A")[0]
+                    suffix = k.split("lora_A")[1]
+                    loranew_key = prefix + "loranew_A" + suffix
+                    if loranew_key in state_dict:
+                        prev_weight = state_dict[k]
+                        new_weight = state_dict[loranew_key]
+                        state_dict[k] = torch.cat((prev_weight, new_weight), dim=0) # [r_sum + r, hidden]
+                        if flag == 1:
+                            config.r_sum = state_dict[k].shape[0]
+                            flag = 0
                 elif "lora_B" in k:
-                    for k_ in state_dict:
-                        if "loranew_B" in k_ and k.split("lora_B")[0] == k_.split("loranew_B")[0]:
-                            state_dict[k] = torch.cat((state_dict[k], state_dict[k_]), dim=1) # [r, r_sum + r]
-                            break # target modules have been matched
+                    prefix = k.split("lora_B")[0]
+                    suffix = k.split("lora_B")[1]
+                    loranew_key = prefix + "loranew_B" + suffix
+                    if loranew_key in state_dict:
+                        state_dict[k] = torch.cat((state_dict[k], state_dict[loranew_key]), dim=1) # [r, r_sum + r]
 
                 
     if config.peft_type in (PeftType.LORA, PeftType.ADALORA):

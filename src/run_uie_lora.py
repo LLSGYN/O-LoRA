@@ -45,6 +45,7 @@ from transformers import (
 from transformers.file_utils import is_offline_mode
 from transformers.trainer_utils import get_last_checkpoint
 from peft import get_peft_config, get_peft_model, LoraConfig, TaskType, PeftModel, PeftConfig # add
+from peft.tuners.lora import LoraLayer  # modified
 
 from uie_collator import DataCollatorForUIE
 from uie_dataset_lora import gen_cache_path
@@ -239,6 +240,10 @@ class UIETrainingArguments(Seq2SeqTrainingArguments):
     do_demo: bool = field(default=False, metadata={"help": "Whether to run the model as a demo in the terminal."})
     lamda_1: float = field(default = 0.5)
     lamda_2: float = field(default = 0)
+    training_stage: str = field(
+        default="stage1",
+        metadata={"help": "Training stage for O-LoRA. Supported values: 'stage1' and 'stage2'."}
+    )
 
 
 def main():
@@ -406,13 +411,38 @@ def main():
     # fine-tune loranew_A/B (initialized in "update_layer"[lora.py])
     # optional: lora_A/B is trainable but should not move too far from lorapre_A/B
     # (constrained in "training_step"[uie_trainer_lora.py])
+    training_stage = training_args.training_stage.lower()
+    if training_stage not in {"stage1", "stage2"}:
+        raise ValueError(f"Unsupported training_stage: {training_args.training_stage}. Expected 'stage1' or 'stage2'.")
+
+    adapter_name = getattr(model, "active_adapter", None)
+    if adapter_name is None or adapter_name not in model.peft_config:
+        adapter_name = list(model.peft_config.keys())[0]
+
+    if training_stage == "stage1":
+        model.peft_config[adapter_name].enable_lora_mixer = False
+        for module in model.modules():
+            if isinstance(module, LoraLayer) and adapter_name in module.lora_mixer:
+                del module.lora_mixer[adapter_name]
+    else:
+        model.peft_config[adapter_name].enable_lora_mixer = True
+        for module in model.modules():
+            if isinstance(module, LoraLayer):
+                module.ensure_mixer(adapter_name)
+
     for name, param in model.named_parameters():
-        if name.find("loranew_") != -1:
-            param.requires_grad = True
-        elif name.find("lora_") != -1:
-            param.requires_grad = False
+        if training_stage == "stage1":
+            if "loranew_" in name:
+                param.requires_grad = True
+            elif "lora_" in name:
+                param.requires_grad = False
+        else:  # stage2
+            if "lora_mixer" in name:
+                param.requires_grad = True
+            elif "lora_" in name or "loranew_" in name:
+                param.requires_grad = False
         # this module should always be frozen because we change the vocabulary
-        elif name.find("shared") != -1:
+        if "shared" in name:
             param.requires_grad = False
 
     if (
