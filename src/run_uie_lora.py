@@ -242,7 +242,7 @@ class UIETrainingArguments(Seq2SeqTrainingArguments):
     lamda_2: float = field(default = 0)
     training_stage: str = field(
         default="stage1",
-        metadata={"help": "Training stage for O-LoRA. Supported values: 'stage1' and 'stage2'."}
+        metadata={"help": "Training stage for O-LoRA. Supported values: ['stage1','stage2','ablation']."}
     )
 
 
@@ -412,14 +412,14 @@ def main():
     # optional: lora_A/B is trainable but should not move too far from lorapre_A/B
     # (constrained in "training_step"[uie_trainer_lora.py])
     training_stage = training_args.training_stage.lower()
-    if training_stage not in {"stage1", "stage2"}:
-        raise ValueError(f"Unsupported training_stage: {training_args.training_stage}. Expected 'stage1' or 'stage2'.")
+    if training_stage not in {"stage1", "stage2", "ablation"}:
+        raise ValueError(f"Unsupported training_stage: {training_args.training_stage}. Expected 'stage1', 'stage2' or 'ablation'.")
 
     adapter_name = getattr(model, "active_adapter", None)
     if adapter_name is None or adapter_name not in model.peft_config:
         adapter_name = list(model.peft_config.keys())[0]
 
-    if training_stage == "stage1":
+    if training_stage == "stage1" or training_stage == "ablation":
         model.peft_config[adapter_name].enable_lora_mixer = False
         for module in model.modules():
             if isinstance(module, LoraLayer) and adapter_name in module.lora_mixer:
@@ -436,6 +436,11 @@ def main():
                 param.requires_grad = True
             elif "lora_" in name:
                 param.requires_grad = False
+        elif training_stage == "ablation":
+            if "loranew_" in name:
+                param.requires_grad = False
+            elif "lora_" in name:
+                param.requires_grad = True
         else:  # stage2
             if "lora_mixer" in name:
                 param.requires_grad = True

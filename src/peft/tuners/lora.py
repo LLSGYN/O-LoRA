@@ -181,14 +181,12 @@ class LoraModel(torch.nn.Module):
                 "You can install it with `pip install bitsandbytes`."
             )
         is_target_modules_in_base_model = False
-        kwargs = {
+        base_kwargs = {
             "r": lora_config.r,
             "lora_alpha": lora_config.lora_alpha,
             "lora_dropout": lora_config.lora_dropout,
             "fan_in_fan_out": lora_config.fan_in_fan_out,
             "init_lora_weights": lora_config.init_lora_weights,
-            "r_sum": lora_config.r_sum,
-            "enable_lora_mixer": lora_config.enable_lora_mixer,
         }
         key_list = [key for key, _ in self.model.named_modules()]
         for key in key_list:
@@ -215,7 +213,7 @@ class LoraModel(torch.nn.Module):
                     )
                 else:
                     if loaded_in_8bit and isinstance(target, bnb.nn.Linear8bitLt):
-                        eightbit_kwargs = kwargs.copy()
+                        eightbit_kwargs = base_kwargs.copy()
                         eightbit_kwargs.update(
                             {
                                 "has_fp16_weights": target.state.has_fp16_weights,
@@ -234,29 +232,34 @@ class LoraModel(torch.nn.Module):
                             **eightbit_kwargs,
                         )
                     elif isinstance(target, torch.nn.Embedding):
-                        embedding_kwargs = kwargs.copy()
+                        embedding_kwargs = base_kwargs.copy()
                         embedding_kwargs.pop("fan_in_fan_out", None)
                         in_features, out_features = target.num_embeddings, target.embedding_dim
                         new_module = Embedding(adapter_name, in_features, out_features, **embedding_kwargs)
                     else:
+                        linear_kwargs = base_kwargs.copy()
                         if isinstance(target, torch.nn.Linear):
                             in_features, out_features = target.in_features, target.out_features
-                            if kwargs["fan_in_fan_out"]:
+                            if linear_kwargs["fan_in_fan_out"]:
                                 warnings.warn(
                                     "fan_in_fan_out is set to True but the target module is `torch.nn.Linear`. "
                                     "Setting fan_in_fan_out to False."
                                 )
-                                kwargs["fan_in_fan_out"] = lora_config.fan_in_fan_out = False
+                                lora_config.fan_in_fan_out = False
+                                linear_kwargs["fan_in_fan_out"] = False
+                                base_kwargs["fan_in_fan_out"] = lora_config.fan_in_fan_out
                         elif isinstance(target, Conv1D):
                             in_features, out_features = (
                                 target.weight.ds_shape if hasattr(target.weight, "ds_shape") else target.weight.shape
                             )
-                            if not kwargs["fan_in_fan_out"]:
+                            if not linear_kwargs["fan_in_fan_out"]:
                                 warnings.warn(
                                     "fan_in_fan_out is set to False but the target module is `Conv1D`. "
                                     "Setting fan_in_fan_out to True."
                                 )
-                                kwargs["fan_in_fan_out"] = lora_config.fan_in_fan_out = True
+                                lora_config.fan_in_fan_out = True
+                                linear_kwargs["fan_in_fan_out"] = True
+                                base_kwargs["fan_in_fan_out"] = lora_config.fan_in_fan_out
                         else:
                             raise ValueError(
                                 f"Target module {target} is not supported. "
@@ -269,7 +272,7 @@ class LoraModel(torch.nn.Module):
                             bias=bias,
                             r_sum=lora_config.r_sum,
                             enable_lora_mixer=lora_config.enable_lora_mixer,
-                            **kwargs,
+                            **linear_kwargs,
                         )  # modified
 
                     self._replace_module(parent, target_name, new_module, target)
